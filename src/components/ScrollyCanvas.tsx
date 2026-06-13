@@ -40,11 +40,14 @@ export default function ScrollyCanvas() {
   // Function to draw image with object-fit: cover logic
   const drawImage = (img: HTMLImageElement) => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
+    // Use alpha: false for better rendering performance if the background is solid
+    const ctx = canvas?.getContext("2d", { alpha: false });
     if (!canvas || !ctx) return;
 
     // Set canvas internal dimensions to match display size
     const { width, height } = canvas.getBoundingClientRect();
+    if (width === 0 || height === 0) return; // Prevent 0x0 errors on initial paint
+
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
@@ -66,7 +69,8 @@ export default function ScrollyCanvas() {
       offsetX = (width - drawWidth) / 2;
     }
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#121212";
+    ctx.fillRect(0, 0, width, height);
     ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
   };
 
@@ -74,25 +78,39 @@ export default function ScrollyCanvas() {
   useEffect(() => {
     if (images.length > 0) {
       const firstImage = images[0];
+      const drawFirst = () => {
+        // Double check it's complete before drawing
+        if (firstImage.complete && firstImage.naturalHeight !== 0) {
+          drawImage(firstImage);
+        }
+      };
+
       if (firstImage.complete) {
-        drawImage(firstImage);
+        drawFirst();
       } else {
-        firstImage.addEventListener("load", () => drawImage(firstImage));
+        firstImage.addEventListener("load", drawFirst);
       }
+      
+      // Safety net for delayed CSS layout or caching quirks
+      const timeoutId = setTimeout(drawFirst, 150);
+
+      const handleResize = () => {
+        const frameIndex = Math.min(
+          FRAME_COUNT - 1,
+          Math.max(0, Math.floor(scrollYProgress.get() * FRAME_COUNT))
+        );
+        if (images[frameIndex]?.complete) {
+          drawImage(images[frameIndex]);
+        }
+      };
+      
+      window.addEventListener("resize", handleResize);
+      return () => {
+        window.removeEventListener("resize", handleResize);
+        clearTimeout(timeoutId);
+        firstImage.removeEventListener("load", drawFirst);
+      };
     }
-    
-    const handleResize = () => {
-      const frameIndex = Math.min(
-        FRAME_COUNT - 1,
-        Math.max(0, Math.floor(scrollYProgress.get() * FRAME_COUNT))
-      );
-      if (images[frameIndex]?.complete) {
-        drawImage(images[frameIndex]);
-      }
-    };
-    
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
   }, [images, scrollYProgress]);
 
   // Scrub through images on scroll
@@ -105,8 +123,16 @@ export default function ScrollyCanvas() {
     );
     
     const img = images[frameIndex];
-    if (img && img.complete) {
+    if (img && img.complete && img.naturalHeight !== 0) {
       drawImage(img);
+    } else {
+      // Fallback: If the current frame hasn't loaded yet, find the nearest previous frame that HAS loaded
+      for (let i = frameIndex - 1; i >= 0; i--) {
+        if (images[i] && images[i].complete && images[i].naturalHeight !== 0) {
+          drawImage(images[i]);
+          break;
+        }
+      }
     }
   });
 
